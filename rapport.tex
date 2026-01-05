@@ -1,0 +1,136 @@
+\documentclass[12pt,a4paper]{article}
+
+% --- Paquets standards ---
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{titlesec}
+
+% --- Configuration du chemin des images ---
+\graphicspath{{assets/}}
+
+% --- Couleurs personnalisées ---
+\definecolor{uha_blue}{rgb}{0.0, 0.2, 0.4}
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{backcolor}{rgb}{0.95,0.95,0.92}
+
+% --- Configuration listings ---
+\lstset{
+    backgroundcolor=\color{backcolor},
+    commentstyle=\color{codegray},
+    keywordstyle=\color{blue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codegreen},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    captionpos=b,
+    frame=single,
+    language=SQL
+}
+
+\begin{document}
+
+% --- PAGE DE GARDE ---
+    \begin{titlepage}
+        \begin{center}
+            \includegraphics[width=6cm]{logo}\\[1cm]
+            \textsc{\Large Université de Haute-Alsace}\\[0.5cm]
+            \textsc{\large Faculté des Sciences et Techniques (FST)}\\[1.5cm]
+            {\large \textbf{Cours : Sécurisation des applications}}\\[0.5cm]
+            \hrule \\[0.4cm]
+            {\huge \bfseries TP : Tests de failles par \\ injections SQL}\\[0.4cm]
+            \hrule \\[1.5cm]
+            {\large \bfseries Analyse technique de l'exploitation de vulnérabilités et implémentation de contre-mesures (PDO/BCRYPT)}\\[2cm]
+            \begin{minipage}{0.45\textwidth}
+                \begin{flushleft} \large
+                    \emph{Présenté par :}\\
+                    \textbf{Oreste MUHIRWA GABO}\\
+                    Master 2 Informatique et Mobilité\\
+                    \small \texttt{oreste.muhirwa-gabo@uha.fr}
+                \end{flushleft}
+            \end{minipage}
+            \hfill
+            \begin{minipage}{0.45\textwidth}
+                \begin{flushright} \large
+                    \emph{Sous la direction de :}\\
+                    \textbf{M. Karim HAMMOUDI}
+                \end{flushright}
+            \end{minipage}
+            \vfill
+            {\large Année Universitaire 2025-2026}
+        \end{center}
+    \end{titlepage}
+
+    \newpage
+    \tableofcontents
+    \newpage
+
+    \section{Introduction}
+    L'injection SQL demeure l'une des menaces les plus critiques selon l'OWASP Top 10. Ce rapport documente une étude de cas pratique sur une application bancaire PHP/MySQL. Nous analysons ici la rupture de contexte entre les données fournies par l'utilisateur et les instructions SQL envoyées au serveur, ainsi que les protocoles de défense permettant de restaurer l'intégrité des requêtes.
+
+    \section{Architecture de la Base de Données}
+    \subsection{Schéma relationnel et Intégrité}
+    La base de données repose sur deux tables liées : \texttt{users} (authentification) et \texttt{accounts} (données métier). L'utilisation d'un moteur \textbf{InnoDB} est justifiée par la nécessité de supporter les \textbf{clés étrangères} (\texttt{FOREIGN KEY}), garantissant qu'un compte bancaire ne peut exister sans un propriétaire valide.
+
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{bdd_structure}
+        \captionof{figure}{Schéma E/R : Relation 1:N entre Utilisateurs et Comptes.}
+    \end{center}
+
+    \section{Exploitation de la Faille (Phase Offensive)}
+    \subsection{Vulnérabilité par Concaténation}
+    Le script \texttt{login\_vulnerable.php} construit sa requête dynamiquement. Techniquement, le moteur SQL ne fait aucune distinction entre la commande écrite par le développeur et la donnée fournie par l'utilisateur.
+
+    \subsection{Analyse de l'Injection par Commentaire (Bypass)}
+    En soumettant le login \texttt{bob' -- }, l'attaquant manipule l'arbre d'analyse syntaxique (Parse Tree) de MySQL.
+    \begin{itemize}
+        \item \textbf{L'apostrophe} : Ferme le champ \texttt{login}.
+        \item \textbf{Les deux tirets} : Indiquent au \textit{lexer} SQL d'ignorer le reste de la chaîne comme un commentaire.
+    \end{itemize}
+
+
+    \subsection{Injection par Tautologie et Extraction de Données}
+    Le payload \texttt{' OR 1=1 \#} transforme la condition de filtrage en une tautologie (proposition toujours vraie).
+    \begin{lstlisting}[caption=Détournement de l'identifiant]
+-- La requête interprétée par le serveur :
+SELECT login, type, amount FROM accounts
+INNER JOIN users ON owner_id = id
+WHERE login = '' OR 1=1 # ...reste ignoré...
+    \end{lstlisting}
+    L'impact est critique : l'attaquant accède à l'intégralité de la table \texttt{accounts} car la clause \texttt{WHERE} ne filtre plus rien.
+
+    \begin{center}
+        \includegraphics[width=0.9\textwidth]{test_injection}
+        \captionof{figure}{Extraction massive des données via injection SQL.}
+    \end{center}
+
+    \section{Sécurisation et Remédiation (Phase Défensive)}
+
+    \subsection{Requêtes Préparées : Mécanisme Interne}
+    La solution implémentée dans \texttt{login\_secure.php} utilise le protocole des requêtes préparées de PDO. Ce processus se décompose en deux étapes :
+    \begin{enumerate}
+        \item \textbf{Preparation} : Le serveur SQL reçoit la structure (\texttt{SELECT ... WHERE login = ?}). Il compile et optimise la requête sans les données.
+        \item \textbf{Execution} : Les données sont envoyées séparément. Le serveur les traite comme des \textbf{littéraux purs}, empêchant toute interprétation de caractères spéciaux (\texttt{'}, \texttt{--}, \texttt{\#}).
+    \end{enumerate}
+
+
+    \begin{center}
+        \includegraphics[width=0.9\textwidth]{test_secure}
+        \captionof{figure}{Neutralisation de l'attaque : le payload est traité comme une simple chaîne textuelle.}
+    \end{center}
+
+    \subsection{Gestion de la Persistance : Hachage BCRYPT}
+    Stocker des mots de passe en clair (comme pour l'utilisateur \texttt{bob}) est une faille de conception. Pour \texttt{alice\_sec}, nous utilisons \textbf{BCRYPT}. Contrairement au chiffrement, le hachage est une fonction à sens unique avec un "sel" (salt) unique généré automatiquement, protégeant contre les attaques par dictionnaire et tables arc-en-ciel.
+
+    \section{Conclusion}
+    L'étude démontre que la sécurité ne peut reposer sur le "nettoyage" (sanitization) des entrées, qui est souvent contournable. Seule la séparation stricte des flux d'instructions et de données via les requêtes paramétrées garantit une immunité totale contre les injections SQL. Dans un contexte de Master 2, cette rigueur est le fondement du développement sécurisé.
+
+\end{document}
